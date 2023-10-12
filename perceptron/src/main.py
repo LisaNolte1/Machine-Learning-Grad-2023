@@ -1,73 +1,72 @@
 from random import seed
 from random import randrange
-from csv import reader
 import pandas as pd
 import os
+from sklearn.preprocessing import OneHotEncoder
 
-def load_csv(filename):
-    data_dict = dict()
-    columns = ["TX_ID", "TX_TS", "CUSTOMER_ID", "TERMINAL_ID", "TX_AMOUNT", "TRANSACTION_GOODS_AND_SERVICES_AMOUNT", "TRANSACTION_CASHBACK_AMOUNT", "CARD_EXPIRY_DATE", "CARD_DATA", "TRANSACTION_TYPE", "TRANSACTION_STATUS", "TRANSACTION_CURRENCY", "CARD_COUNTRY_CODE", "MERCHANT_ID", "IS_RECURRING_TRANSACTION", "ACQUIRER_ID", "CARDHOLDER_AUTH_METHOD"]
+def load_csv(filename, trainfile):
+    columns = ["TX_FRAUD", "TX_TS", "TX_AMOUNT", "TRANSACTION_GOODS_AND_SERVICES_AMOUNT", "TRANSACTION_CASHBACK_AMOUNT", "CARD_EXPIRY_DATE", "CARD_BRAND", "TRANSACTION_TYPE", "TRANSACTION_STATUS", "FAILURE_CODE", "TRANSACTION_CURRENCY", "CARD_COUNTRY_CODE", "IS_RECURRING_TRANSACTION", "CARDHOLDER_AUTH_METHOD"]
 
-    dataset = pd.read_csv(os.path.join(filename, "transactions_train.csv"))
+    # Load your datasets
+    dataset = pd.read_csv(os.path.join(filename, trainfile))
     customer_info = pd.read_csv(os.path.join(filename, 'customers.csv'))
     merchant_info = pd.read_csv(os.path.join(filename, 'merchants.csv'))
     terminal_info = pd.read_csv(os.path.join(filename, 'terminals.csv'))
 
-    data_dict['dataset'] = dataset
-
+    # Merge datasets
     merged_dataset = dataset.merge(customer_info, on='CUSTOMER_ID', how='left')
     merged_dataset = merged_dataset.merge(merchant_info, on='MERCHANT_ID', how='left')
     merged_dataset = merged_dataset.merge(terminal_info, on='TERMINAL_ID', how='left')
 
-    data_dict['merged_dataset'] = merged_dataset
-
     # Select the desired columns from merged_dataset
     selected_columns = merged_dataset[columns]
 
-    # Convert the selected columns to a list of lists
-    selected_columns_list = selected_columns.values.tolist()
+    # Apply one-hot encoding to categorical columns in the selected data
+    categorical_columns = ['CARD_BRAND', 'TRANSACTION_TYPE', 'TRANSACTION_STATUS', 'TRANSACTION_CURRENCY', 'TX_FRAUD']
+    encoder = OneHotEncoder(sparse=False, drop='first')
+    one_hot_encoded = encoder.fit_transform(selected_columns[categorical_columns])
+    one_hot_df = pd.DataFrame(one_hot_encoded, columns=encoder.get_feature_names_out(categorical_columns))
 
-    return selected_columns_list
+    # Combine the one-hot encoded data with the selected columns
+    data = selected_columns.drop(categorical_columns, axis=1)
+    data = pd.concat([data, one_hot_df], axis=1)
+
+    return data
 
 # Convert string column to float
-def str_column_to_float(dataset, column):
-    for row in dataset[1:]:
-        value = row[column]
-        if isinstance(value, str):
-            try:
-                row[column] = float(value.strip())
-            except ValueError:
-                pass  # Handle invalid float values
-        elif isinstance(value, int):
-            # No need to convert, it's already an integer
-            pass
-        else:
-            # Handle other data types as needed
-            pass
+def str_column_to_float(dataset):
+    for column in dataset.select_dtypes(include=['number']):
+        dataset[column] = dataset[column].astype(float)
+    return dataset
 
 # Convert string column to integer
-def str_column_to_int(dataset, column):
-    class_values = [row[column] for row in dataset]
-    unique = set(class_values)
-    lookup = dict()
-    for i, value in enumerate(unique):
-        lookup[value] = i
-    for row in dataset:
-        row[column] = lookup[row[column]]
-    return lookup
+def str_column_to_int(dataset):
+    for column in dataset.select_dtypes(include=['number']):
+        dataset[column] = dataset[column].astype(int)
+    return dataset  
 
 # Split a dataset into k folds
 def cross_validation_split(dataset, n_folds):
-	dataset_split = list()
-	dataset_copy = list(dataset)
-	fold_size = int(len(dataset) / n_folds)
-	for _ in range(n_folds):
-		fold = list()
-		while len(fold) < fold_size:
-			index = randrange(len(dataset_copy))
-			fold.append(dataset_copy.pop(index))
-		dataset_split.append(fold)
-	return dataset_split
+    dataset_split = list()
+    dataset_copy = list(dataset.values)
+    n = len(dataset_copy)
+    fold_size = n // n_folds  # Calculate the fold size
+
+    if n < n_folds:
+        raise ValueError("Number of folds is greater than the number of data points.")
+
+    for _ in range(n_folds):
+        fold = list()
+        while len(fold) < fold_size:
+            index = randrange(len(dataset_copy))
+            fold.append(dataset_copy.pop(index))
+        dataset_split.append(fold)
+
+    # If there are remaining data points, add them to the last fold
+    while dataset_copy:
+        dataset_split[-1].append(dataset_copy.pop())
+
+    return dataset_split
 
 # Calculate accuracy percentage
 def accuracy_metric(actual, predicted):
@@ -108,9 +107,8 @@ def predict(row, weights):
 
 # Estimate Perceptron weights using stochastic gradient descent
 def train_weights(train, l_rate, n_epoch):
-    if os.path.exists("output.txt"):
-        with open("output.txt", "r") as f:
-            weights = [x for x in f]
+    if os.path.exists("output.csv"):
+        weights = pd.read_csv('output.csv').values
     else:
         weights = [0.0 for _ in range(len(train[0]))]
     
@@ -125,37 +123,41 @@ def train_weights(train, l_rate, n_epoch):
                 except TypeError:
                     pass
     
-    with open("output.txt", "w") as f:
-        f.write("".join(weights))
+    df = pd.DataFrame(weights)
+    df.to_csv('output.csv', index=False)
     return weights
 
 # Perceptron Algorithm With Stochastic Gradient Descent
 def perceptron(train, test, l_rate, n_epoch):
     predictions = list()
     weights = train_weights(train, l_rate, n_epoch)
-    
     for row in test:
         prediction = predict(row, weights)
         predictions.append(prediction)
     return(predictions)
 
 def main():
-    seed(1)
-    # Load and merge data
-    folder_path = os.path.join(os.getcwd(), "perceptron\\src\\data")
-    dataset = load_csv(folder_path)
+    trainFiles = [x for x in os.listdir(os.path.join(os.getcwd(), "perceptron\\src\\data")) if x.startswith("transactions_train")]
+    for fileName in trainFiles:
+        seed(1)
+        # Load and merge data
+        folder_path = os.path.join(os.getcwd(), "perceptron\\src\\data")
+        dataset = load_csv(folder_path, fileName)
+        dataset['TX_TS'] = pd.to_datetime(dataset['TX_TS'])
     
-    for i in range(len(dataset[1])-1):
-        str_column_to_float(dataset, i)
-    # convert string class to integers
-    str_column_to_int(dataset, len(dataset[1])-1)
-	# evaluate algorithm
-    n_folds = 3
-    l_rate = 0.01
-    n_epoch = 250
-    scores = evaluate_algorithm(dataset, perceptron, n_folds, l_rate, n_epoch)
-    print('Scores: %s' % scores)
-    print('Mean Accuracy: %.3f%%' % (sum(scores)/float(len(scores))))
+        str_column_to_float(dataset)
+        str_column_to_int(dataset)
+	    # evaluate algorithm
+        n_folds = 2
+        l_rate = 0.01
+        n_epoch = 500
+        scores = evaluate_algorithm(dataset, perceptron, n_folds, l_rate, n_epoch)
+        print('Scores: %s' % scores)
+        print('Mean Accuracy: %.3f%%' % (sum(scores)/float(len(scores))))
+        #TX_ID = testSet['TX_ID']
+        #TX_FRAUD = predictions
+        #save those to csv
+        # [TX_ID, TX_FRAUD]
 
 if __name__ == "__main__":
 	main()
