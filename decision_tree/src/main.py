@@ -20,7 +20,7 @@ def check_files():
 
 def load_csv(path, file):
     #load datafile        
-    dataset = pd.read_csv(path + 'small_train.csv')
+    dataset = pd.read_csv(path + file)
     
     #load other files
     customer_info = pd.read_csv(path + 'customers.csv')
@@ -36,24 +36,15 @@ def load_csv(path, file):
 
 def get_XY(data, columns):
     #features(deciding dactors X
-    X = data.loc[:,columns]
+    X = data[columns]
     
     #colomn to predict Y
-    Y = data.loc[:,'TX_FRAUD']
+    Y = data['TX_FRAUD']
     
     return X, Y
 
-def split_data(X , Y):
-    
-    X_train, X_valid, y_train, y_valid = train_test_split(X, Y, test_size=0.2, random_state=42)
-    print(X_train.shape, X_valid.shape, y_train.shape, y_valid.shape)
-
-    return X_train, X_valid, y_train, y_valid
-
 def create_model(X , Y, leaf_node, columns):
     model_tree = DecisionTreeClassifier(max_leaf_nodes=leaf_node, class_weight='balanced')
-    #lab = preprocessing.LabelEncoder()
-    #y_transformed = lab.fit_transform(yt)
     model_tree.fit(X , Y)
     
     #Create the figure
@@ -107,19 +98,19 @@ def main():
     
     #feature names
     columns = [ "TX_AMOUNT", "TRANSACTION_GOODS_AND_SERVICES_AMOUNT"
-               , "TRANSACTION_CASHBACK_AMOUNT", "MCC_CODE", "IS_RECURRING_TRANSACTION"]
+               , "TRANSACTION_CASHBACK_AMOUNT", "MCC_CODE", "x_customer_id"
+               , "y_customer_id", "x_terminal_id", "y_terminal__id", "ANNUAL_TURNOVER_CARD"
+               , "AVERAGE_TICKET_SALE_AMOUNT", "PAYMENT_PERCENTAGE_FACE_TO_FACE", "PAYMENT_PERCENTAGE_ECOM"
+               , "DEPOSIT_PERCENTAGE"]
     
     #load training csv
-    train_data = load_csv(path, 'small_train.csv')
+    train_data = load_csv(path, 'transactions_train.csv')
     
     #number of frauds
     print(train_data.groupby('TX_FRAUD').size())
     
     #create x and y
     X , Y = get_XY(train_data, columns)
-    
-    #split into train and valid
-    X_train, X_valid, y_train, y_valid = split_data(X , Y)
     
     #Get the optimum leaf nodes
     leaf_node = get_best_leaf_node(X , Y)
@@ -133,14 +124,15 @@ def main():
     print(test_data.describe())
     
     #Make predictions
-    X_test = test_data.loc[:, columns]
-    y_test_pred  = model.predict(X_test)
+    X_test = test_data[columns]
+    y_test_pred  = model.predict_proba(X_test)
     
+    print("Predictions")
     print(y_test_pred)
     
     #Create new datframe for submission
     TX_ID = test_data.loc[:, 'TX_ID']
-    submit_data = {'TX_ID': TX_ID, 'TX_FRAUD': y_test_pred}  
+    submit_data = {'TX_ID': TX_ID, 'TX_FRAUD': y_test_pred[:, 1]}  
     submit_df = pd.DataFrame(submit_data)
     
     #Write data to a new csv
